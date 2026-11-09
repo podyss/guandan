@@ -1,0 +1,29 @@
+[project]
+name = "fabledan"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "podyss", email = "18515043822@qq.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "mpi4py>=4.1.2",
+    "numpy>=2.5.4",
+    "psutil>=7.2.2",
+    "pyyaml>=6.0.3",
+    "pyzmq>=27.3.0",
+    "torch>=2.15.0",
+    "ws4py>=0.6.0",
+]
+
+[project.scripts]
+fabledan = "fabledan:main"
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"
+
+[[tool.uv.index]]
+url = "https://mirrors.aliyun.com/pypi/simple/"
+default = true

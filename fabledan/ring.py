@@ -12,6 +12,7 @@ import random
 import numpy as np
 
 from .cards import rank_of
+from .danzero_filter import encode_danzero_candidates
 from .encode import encode_decision
 from .engine import GuandanRound, random_tribute_mode
 
@@ -86,22 +87,24 @@ class RingRunner:
         out = []
         for slot, g in enumerate(self.games):
             g.enc = encode_decision(g.obs)
-            out.append((slot, g.enc[0], g.enc[1]))
+            out.append((slot, g.enc[0], g.enc[1],
+                        encode_danzero_candidates(g.obs)))
         return out
 
     def step(self, results):
-        """results: dict slot -> q ndarray [A]. Choose actions, advance."""
-        for slot, q in results.items():
+        """results: dict slot -> (candidate indices, candidate Q values)."""
+        for slot, result in results.items():
             g = self.games[slot]
-            n = len(q)
-            if self.eps > 0 and self.rng.random() < self.eps:
-                if self.top_k > 1:
-                    k = min(self.top_k, n)
-                    idx = int(self.rng.choice(list(np.argsort(q)[-k:])))
-                else:
-                    idx = self.rng.randrange(n)
+            if isinstance(result, tuple):
+                candidate_indices, q = result
             else:
-                idx = int(np.argmax(q))
+                candidate_indices = np.arange(len(result))
+                q = result
+            if self.eps > 0 and self.rng.random() < self.eps:
+                candidate_pos = self.rng.randrange(len(candidate_indices))
+            else:
+                candidate_pos = int(np.argmax(q))
+            idx = int(candidate_indices[candidate_pos])
             toks, feats = g.enc
             g.samples.append((np.asarray(toks, dtype=np.int16),
                               feats[idx], g.obs["player"],

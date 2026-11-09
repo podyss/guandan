@@ -2,6 +2,7 @@
 
 # Trained models / checkpoints / exported weights (train your own)
 ckpts/
+Danzero_plus/runs/
 data/
 *.pt
 *.npz

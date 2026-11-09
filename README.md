@@ -173,14 +173,107 @@ python -m fabledan.train_fast --out ckpts/run1 --resume ckpts/run1/latest.pt
 ```
 
 Useful flags: `--n-blocks` (encoder depth, default 4), `--ntp-weight`
-(default 0.02), `--belief-weight` (default 0.05, `0` to disable), `--batch`,
-`--actors`, `--max-decisions` (GPU batch size), `--max-hours` (auto-stop +
-final export). Whenever evaluation hits a new high, the trainer auto-exports a
+(default 0.02), `--belief-weight` (default 0; set positive only for the legacy
+belief auxiliary), `--batch`,
+`--actors` (default 8 on this host), `--infer-threads` (CPU threads for
+filter/inference, default 32),
+`--infer-stats-every` (inference/CPU report interval, default 10 seconds),
+`--max-decisions` (GPU batch size), `--max-hours` (auto-stop + final export).
+Inference reports include decisions/s, average batch size, actor messages, and
+the inference server's CPU cores used. Whenever evaluation hits a new high, the trainer auto-exports a
 NumPy `best.npz` and packs a ready-to-upload Botzone zip.
+
+The learner uses a default `--micro-batch` of 512 to bound activation memory
+while retaining the configured effective `--batch`. Actor processes are
+limited to one PyTorch CPU thread to avoid oversubscribed thread pools.
+
+Training evaluates against the local `RuleAgent` every 100 cycles by default,
+using 100 rounds and up to 16 parallel CPU workers. Progress is printed every
+10 completed rounds; after all rounds finish, the complete result is appended
+as one record to `<out>/evaluations.jsonl`. Override these defaults with
+`--eval-cycles`, `--eval-games`, and `--eval-workers`.
+Before each scheduled evaluation, a persistent checkpoint (including optimizer
+state) is saved to `<out>/checkpoints/<cycle>.pt`, for example
+`ckpts/run1/checkpoints/700.pt`. Evaluation records reference this checkpoint;
+it is retained after evaluation, independently of `latest.pt` and `best.pt`.
 
 The trainer reports two signals: **win-rate vs the rule baseline** (saturates
 early) and **win-rate vs a frozen self-snapshot** — once the rule win-rate
 plateaus, the snapshot number is the trustworthy "still getting stronger" gauge.
+
+### Frozen DanZero+ DMC + FableDan selector experiment
+
+The local `Danzero_plus/actor_torch/q_network.ckpt` is used as a frozen Top-K
+filter; FableDan's Transformer/Q model replaces the PPO selector. The adapter
+translates FableDan observations into DanZero+'s 567-dimensional input. Since
+FableDan's single-round engine has no match progression metadata, the DMC
+adapter approximates the two team-rank fields with the current round level and
+sets the season-A counters to zero. Treat this as a runnable prototype, not a
+faithful DanZero+ reproduction or a performance claim.
+
+```bash
+# Frozen DMC direct-choice baseline
+uv run python -m fabledan.evaluate --a dmc --filter-ckpt \
+    Danzero_plus/actor_torch/q_network.ckpt --b rule --games 200 --seed 42
+
+# Train a Top-2 FableDan selector with DMC return regression + NTP only
+uv run python -m fabledan.train_fast --out ckpts/dmc-ntp-top2 \
+    --filter-ckpt Danzero_plus/actor_torch/q_network.ckpt \
+    --candidate-k 2 --belief-weight 0 --ntp-weight 0.02 --actors 8
+
+# Evaluate the trained selector over the same frozen Top-2 filter
+uv run python -m fabledan.evaluate --a ckpts/dmc-ntp-top2/latest.pt \
+    --filter-ckpt Danzero_plus/actor_torch/q_network.ckpt \
+    --candidate-k 2 --b rule --games 200 --seed 42
+```
+
+PPO is not run by this FableDan training path. For a quick smoke test, reduce
+`--actors`, `--ring`, `--buffer`, `--batch`, and `--cycles`; do not interpret a
+smoke-test win rate as a meaningful comparison.
+
+### Benchmark native evaluation on CPU and GPU
+
+The native evaluator supports `--device cpu` (local inference) and
+`--device cuda:0` (shared, dynamically batched GPU inference). CUDA is selected
+automatically when available. FP32 is the default; `--infer-precision bf16` is
+optional and may change close action rankings. Neural-network speedups do not
+necessarily translate into equivalent complete-match speedups.
+
+To compare real baseline games on this machine with the same checkpoint:
+
+```bash
+uv run python Danzero_plus/benchmark_fabledan_inference.py \
+    --checkpoint ckpts/fabledan-top10/latest.pt --device cuda:0 \
+    --baseline 2 --tables 4 48 --episodes-per-table 4 --repeats 2 \
+    --output ckpts/fabledan-top10/benchmarks/cpu-gpu/results.json
+```
+
+Use a fresh output directory and free game-server ports (default offsets
+400 onward). Trials alternate CPU/GPU order, include startup and IPC costs,
+and report hands/second and median GPU speedup at each concurrency level.
+Deals are random, other GPU jobs are not stopped, and each hand is shorter
+than a complete GuanDan match; repeat longer trials before extrapolating to
+a 1,000-match run. Logs and individual reports remain beside the results.
+
+### Train a DanZero+ PPO comparison baseline
+
+The separate local runner uses the original DanZero+ game executable and PPO
+selector, with independent CPU tables feeding one GPU learner. It benchmarks
+parallelism, trains fresh weights and then plays exactly 1,000 seat-swapped
+rounds against the existing FableDan Top-2 selector:
+
+```bash
+uv run python Danzero_plus/finish_comparison.py \
+    Danzero_plus/runs/ppo-comparison --tables 1 32 64 \
+    --seconds 1800 --updates 1000 --workers 16
+```
+
+Use a new run directory. `status.json` distinguishes benchmarking, training,
+evaluation and completion. Finished weights/results are also exported to
+`ckpts/danzero-ppo-fast/`. This is a short-budget pilot, not an equal-compute
+comparison with a 12-hour FableDan checkpoint; the single-round feature-context
+approximation still applies. See `Danzero_plus/LOCAL_TRAINING.md` for setup,
+individual commands, speed metrics and regression checks.
 
 ---
 
